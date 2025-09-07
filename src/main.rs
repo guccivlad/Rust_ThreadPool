@@ -1,6 +1,7 @@
-use test_project::threadpool::ThreadPool;
 use std::sync::{Arc, Mutex};
+
 use test_project::waitgroup::WaitGroup;
+use test_project::threadpool::ThreadPool;
 
 fn main() {
     let first_count = Arc::new(Mutex::new(0));

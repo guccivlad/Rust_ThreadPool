@@ -1,25 +1,37 @@
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
+use std::sync::Arc;
+use crate::waitwake;
 
 pub struct WaitGroup {
-    counter: Arc<Mutex<i32>>,
-    is_running: Arc<Condvar>,
+    state: Arc<AtomicU32>,
+    generation: Arc<AtomicU32>,
 }
 
 impl WaitGroup {
     pub fn new() -> Self {
         return Self {
-            counter: Arc::new(Mutex::new(0)),
-            is_running: Arc::new(Condvar::new()),
-        };
+            state: Arc::new(AtomicU32::new(0)),
+            generation: Arc::new(AtomicU32::new(0)),
+        }
     }
 
     pub fn add(&self, delta: i32) {
-        let mut count = self.counter.lock().unwrap();
-        *count += delta;
+        if delta > 0 {
+            self.state.fetch_add(delta as u32, AcqRel);
+        } else if delta < 0 {
+            let k = (-delta) as u32;
+            let prev = self.state.fetch_sub(k, AcqRel);
 
-        if *count == 0 {
-            self.is_running.notify_all();
-        }
+            if prev < k {
+                panic!("Negative WiatGroup count");
+            }
+
+            if prev == k {
+                self.generation.fetch_add(1, Release);
+                waitwake::wake_all(&self.generation);
+            }
+        } else {}
     }
 
     pub fn done(&self) {
@@ -27,18 +39,21 @@ impl WaitGroup {
     }
 
     pub fn wait(&self) {
-        let mut count = self.counter.lock().unwrap();
-        while *count > 0 {
-            count = self.is_running.wait(count).unwrap();
+        loop {
+            let g = self.generation.load(Acquire);
+
+            if self.state.load(Acquire) == 0 { return; }
+
+            waitwake::wait(&self.generation, g);
         }
     }
 }
 
-impl Clone for WaitGroup{
+impl Clone for WaitGroup {
     fn clone(&self) -> Self {
         return Self {
-            counter: Arc::clone(&self.counter),
-            is_running: Arc::clone(&self.is_running),
-        }
+            state: Arc::clone(&self.state),
+            generation: Arc::clone(&self.generation),
+        };
     }
 }
